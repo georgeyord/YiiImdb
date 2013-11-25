@@ -176,10 +176,9 @@ class ImdbComponent extends CApplicationComponent {
 
             // Create $url and $params used in request
             $url = $this->buildUrl($this->api->endpoint, $params);
-            $cacheKey = $this->cacheDuration ? self::CACHE_KEY . md5(serialize(array($url))) : '';
 
-            if ($response = $this->makeRequest($url, $cacheKey)) {
-                $movie = $this->processResponse($response, $cacheKey);
+            if ($response = $this->makeRequest($url)) {
+                $movie = $this->processResponse($response);
                 $this->addMovie($movie);
             }
         }
@@ -195,17 +194,41 @@ class ImdbComponent extends CApplicationComponent {
      * @param String $cacheKey to load from cache
      * @return ImdbMovie model on success, false otherwise
      */
-    protected function makeRequest($url, $cacheKey) {
+    protected function makeRequest($url) {
+        $cacheKey = $this->cacheDuration ? self::CACHE_KEY . md5(serialize(array($url))) : '';
+
         // Get cached response if exist
         if ($this->cacheDuration && isset(Yii::app()->cache) && $response = Yii::app()->cache->get($cacheKey)) {
             YII_DEBUG && Yii::log("API response to '$url' loaded from cache", CLogger::LEVEL_INFO, self::LOGPATH);
             return $response;
         }
 
+        $request = $this->curl->get($url, false);
         try {
             Yii::log(sprintf('Curl request to %s', $url), CLogger::LEVEL_INFO, self::LOGPATH);
-            $request = $this->curl->get($url, false);
             $response = $request->exec();
+
+            // Decode and validate json
+            $response = $response->fromJSON();
+            if (json_last_error() != JSON_ERROR_NONE) {
+                $this->error = 'Response should be in json format';
+                return false;
+            }
+            // Check response
+            if (isset($response['error'])) {
+                $this->error = $response['error'];
+                return false;
+            }
+            if (isset($response['Error'])) {
+                $this->error = $response['Error'];
+                return false;
+            }
+
+            // Save response to cache if needed
+            if ($this->cacheDuration && isset(Yii::app()->cache) && !empty($response)) {
+                Yii::app()->cache->set($cacheKey, $response, $this->cacheDuration);
+                YII_DEBUG && Yii::log("API response to saved in cache", CLogger::LEVEL_INFO, self::LOGPATH);
+            }
         } catch (ACurlException $e) {
             switch ($e->statusCode) {
                 case 400:
@@ -239,30 +262,16 @@ class ImdbComponent extends CApplicationComponent {
      * Decode and check response
      *
      * @param json $response
-     * @param string $cacheKey
      * @return ImdbMovie model on success, false otherwise
      */
-    private function processResponse($response, $cacheKey) {
-        // Decode and check response
-        $json = $response->fromJSON();
-        if (json_last_error() != JSON_ERROR_NONE) {
-            $this->error = 'Response should be in json format';
-            return false;
-        }
-
-        // Save response to cache if needed
-        if ($this->cacheDuration && isset(Yii::app()->cache) && !empty($response)) {
-            Yii::app()->cache->set($cacheKey, $response, $this->cacheDuration);
-            YII_DEBUG && Yii::log("API response to saved in cache", CLogger::LEVEL_INFO, self::LOGPATH);
-        }
-
-        if (!isset($json['year']) && isset($json[0]) && isset($json[0]['year']))
-            $json = $json[0];
+    private function processResponse($response) {
+        if (!isset($response['year']) && isset($response[0]) && isset($response[0]['year']))
+            $response = $response[0];
 
         $model = new ImdbMovie();
         foreach ($this->api->responseMapping as $m => $a) {
-            if ($a && $json[$a])
-                $model->{$m} = $json[$a];
+            if ($a && $response[$a])
+                $model->{$m} = $response[$a];
         }
 
         return $model;
@@ -292,7 +301,7 @@ class ImdbComponent extends CApplicationComponent {
             if (is_array($value)) {
                 $query .= $this->buildQuery($value, sprintf($format, $key) . "[%s]");
             } else {
-                $query .= sprintf($format, $key) . "=$value&";
+                $query .= sprintf($format, $key) . "=".urlencode($value)."&";
             }
         }
         return $query;
