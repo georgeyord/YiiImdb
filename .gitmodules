@@ -1,0 +1,3 @@
+[submodule "lib/yii-curl"]
+	path = lib/yii-curl
+	url = git@github.com:phpnode/YiiCurl.git
