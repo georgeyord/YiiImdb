@@ -63,7 +63,7 @@ class ImdbComponent extends CApplicationComponent {
                 'votes' => 'rating_count',
                 'genre' => 'genres',
                 'plot' => 'plot_simple',
-                'language' => 'rated',
+                'language' => 'languages',
                 'country' => 'country',
                 'image' => 'poster',
                 'year' => 'year',
