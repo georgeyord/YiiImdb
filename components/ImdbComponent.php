@@ -21,6 +21,7 @@ class ImdbComponent extends CApplicationComponent {
      * @var Array of strings
      */
     private $_movies = array();
+    private $moviesCacheKey;
 
     /**
      * Set to the number of seconds needed to cache each request, false to deactivate it
@@ -47,34 +48,42 @@ class ImdbComponent extends CApplicationComponent {
     CONST IMDB_ORG = 'imdbapi.org';
     CONST OMDB_COM = 'omdbapi.com';
 
+    /**
+     * Array delimeter
+     */
+    CONST DELIMETER = ',';
+
+    static public $apis = array(self::IMDB_ORG, self::OMDB_COM);
     static private $apiOptions = array(
         self::IMDB_ORG => array(
+            'id' => self::IMDB_ORG,
             'endpoint' => 'http://imdbapi.org/',
             'searchMapping' => array(
                 'id' => 'id',
                 'title' => 'title',
             ),
             'responseMapping' => array(
-                'id' => 'imdb_id',
-                'url' => 'imdb_url',
+                'imdbId' => 'imdb_id',
+                'imdbUrl' => 'imdb_url',
                 'title' => 'title',
                 'aka' => 'also_known_as',
                 'rating' => 'rating',
                 'votes' => 'rating_count',
-                'genre' => 'genres',
+                'genres' => 'genres',
                 'plot' => 'plot_simple',
-                'language' => 'languages',
-                'country' => 'country',
-                'image' => 'poster',
+                'languages' => 'language',
+                'countries' => 'country',
+                'images' => 'poster',
                 'year' => 'year',
                 'runtime' => 'runtime',
-                'director' => 'directors',
-                'writer' => 'writers',
-                'actor' => 'actors',
+                'directors' => 'directors',
+                'writers' => 'writers',
+                'actors' => 'actors',
                 'rated' => 'rated',
             ),
         ),
         self::OMDB_COM => array(
+            'id' => self::OMDB_COM,
             'endpoint' => 'http://omdbapi.com/',
             'searchMapping' => array(
                 'id' => 'i',
@@ -82,22 +91,22 @@ class ImdbComponent extends CApplicationComponent {
                 'year' => 'y',
             ),
             'responseMapping' => array(
-                'id' => 'imdbID',
-                'url' => false,
+                'imdbId' => 'imdbID',
+                'imdbUrl' => false,
                 'title' => 'Title',
                 'aka' => false,
                 'rating' => 'imdbRating',
                 'votes' => 'imdbVotes',
-                'genre' => 'Genre',
+                'genres' => 'Genre',
                 'plot' => 'Plot',
-                'language' => false,
-                'country' => false,
-                'image' => 'Poster',
+                'languages' => false,
+                'countries' => false,
+                'images' => 'Poster',
                 'year' => 'Year',
                 'runtime' => 'Runtime',
-                'director' => 'Director',
-                'writer' => 'Writer',
-                'actor' => 'Actors',
+                'directors' => 'Director',
+                'writers' => 'Writer',
+                'actors' => 'Actors',
                 'rated' => 'Rated',
             ),
         ),
@@ -113,13 +122,20 @@ class ImdbComponent extends CApplicationComponent {
      */
     private $curl;
 
-    public function __construct() {
+    public function __construct($cacheDuration = null) {
         /**
          * Load Curl extension
          */
-        Yii::setPathOfAlias('imdbComponent', __DIR__ . DIRECTORY_SEPARATOR . '..');
-        Yii::import('imdbComponent.lib.yii-curl.*');
+        Yii::import('ext.curl.*');
         $this->curl = new ACurl();
+
+        if ($cacheDuration !== null)
+            $this->cacheDuration = $cacheDuration;
+
+        // Get cached response if exist
+        $this->moviesCacheKey = self::CACHE_KEY . 'movies';
+        if ($movies = $this->getFromCache($this->moviesCacheKey))
+            $this->_movies = $movies;
     }
 
     /** PUBLIC FUNCTIONS */
@@ -158,15 +174,18 @@ class ImdbComponent extends CApplicationComponent {
         // Activate all APIs if none selected
         if ($api == null)
             $api = array_keys(self::$apiOptions);
+        else if (is_string($api))
+            $api = array($api);
 
+        $movieId = null;
         // Request to the different APIs
         foreach ($api as $currentApi) {
             $this->api = (object) self::$apiOptions[$currentApi];
             $this->api->name = $currentApi;
 
             $params = array();
-            if ($id && isset($this->api->searchMapping['id']))
-                $params[$this->api->searchMapping['id']] = $id;
+            if ($id && isset($this->api->searchMapping['imdbId']))
+                $params[$this->api->searchMapping['imdbId']] = $id;
             if ($title && isset($this->api->searchMapping['title']))
                 $params[$this->api->searchMapping['title']] = $title;
             if ($year && isset($this->api->searchMapping['year']))
@@ -179,10 +198,10 @@ class ImdbComponent extends CApplicationComponent {
 
             if ($response = $this->makeRequest($url)) {
                 $movie = $this->processResponse($response);
-                $this->addMovie($movie);
+                $movieId = $this->updateMovies($movie);
             }
         }
-        return $this->getMovies();
+        return $this->getMovie($movieId);
     }
 
     /** PRIVATE FUNCTIONS */
@@ -195,13 +214,11 @@ class ImdbComponent extends CApplicationComponent {
      * @return ImdbMovie model on success, false otherwise
      */
     protected function makeRequest($url) {
-        $cacheKey = $this->cacheDuration ? self::CACHE_KEY . md5(serialize(array($url))) : '';
+        $cacheKey = self::CACHE_KEY . md5(serialize(array($url)));
 
         // Get cached response if exist
-        if ($this->cacheDuration && isset(Yii::app()->cache) && $response = Yii::app()->cache->get($cacheKey)) {
-            YII_DEBUG && Yii::log("API response to '$url' loaded from cache", CLogger::LEVEL_INFO, self::LOGPATH);
+        if ($response = $this->getFromCache($cacheKey))
             return $response;
-        }
 
         $request = $this->curl->get($url, false);
         try {
@@ -225,10 +242,7 @@ class ImdbComponent extends CApplicationComponent {
             }
 
             // Save response to cache if needed
-            if ($this->cacheDuration && isset(Yii::app()->cache) && !empty($response)) {
-                Yii::app()->cache->set($cacheKey, $response, $this->cacheDuration);
-                YII_DEBUG && Yii::log("API response to saved in cache", CLogger::LEVEL_INFO, self::LOGPATH);
-            }
+            $this->storeToCache($cacheKey, $response);
         } catch (ACurlException $e) {
             switch ($e->statusCode) {
                 case 400:
@@ -259,6 +273,45 @@ class ImdbComponent extends CApplicationComponent {
     }
 
     /**
+     * Get cached data if exist
+     *
+     * @param string $key
+     * @param mixed $data
+     * @return boolean
+     */
+    private function getFromCache($key) {
+        if ($this->cacheDuration && isset(Yii::app()->cache) && $cached = Yii::app()->cache->get($key)) {
+            YII_DEBUG && Yii::log("Data loaded from cache (key: $key)", CLogger::LEVEL_INFO, self::LOGPATH);
+            return $cached;
+        }
+        return false;
+    }
+
+    /**
+     * Save items to cache if possible
+     *
+     * @param string $key
+     * @param mixed $data
+     */
+    private function storeToCache($key, $data) {
+        if ($this->cacheDuration && isset(Yii::app()->cache) && !empty($data)) {
+            Yii::app()->cache->set($key, $data, $this->cacheDuration);
+            YII_DEBUG && Yii::log("Data saved to cache (key: $key) for {$this->cacheDuration}secs", CLogger::LEVEL_INFO, self::LOGPATH);
+        }
+    }
+
+    /**
+     * Delete cache key if possible
+     *
+     * @param string $key
+     * @param mixed $data
+     */
+    private function deleteCache($key) {
+        if (isset(Yii::app()->cache))
+            Yii::app()->cache->delete($key);
+    }
+
+    /**
      * Decode and check response
      *
      * @param json $response
@@ -269,9 +322,17 @@ class ImdbComponent extends CApplicationComponent {
             $response = $response[0];
 
         $model = new ImdbMovie();
-        foreach ($this->api->responseMapping as $m => $a) {
-            if ($a && $response[$a])
-                $model->{$m} = $response[$a];
+        $model->apis = array($this->api->id);
+        foreach ($this->api->responseMapping as $m => $i) {
+            if ($i && isset($response[$i])) {
+                if (ImdbMovie::$attributesType[$m] == ImdbMovie::TYPE_ARRAY && !is_array($response[$i]))
+                    $response[$i] = array_map('trim', explode(self::DELIMETER, $response[$i]));
+                else if (ImdbMovie::$attributesType[$m] == ImdbMovie::TYPE_TEXT && is_array($response[$i]))
+                    $response[$i] = implode(self::DELIMETER, $response[$i]);
+                else if (is_string($response[$i]))
+                    $response[$i] = trim($response[$i]);
+                $model->{$m} = $response[$i];
+            }
         }
 
         return $model;
@@ -301,7 +362,7 @@ class ImdbComponent extends CApplicationComponent {
             if (is_array($value)) {
                 $query .= $this->buildQuery($value, sprintf($format, $key) . "[%s]");
             } else {
-                $query .= sprintf($format, $key) . "=".urlencode($value)."&";
+                $query .= sprintf($format, $key) . "=" . urlencode($value) . "&";
             }
         }
         return $query;
@@ -328,12 +389,57 @@ class ImdbComponent extends CApplicationComponent {
     }
 
     /**
-     * Adds a new movie to the specified attribute.
+     * Returns the ImdbMovie found or null
+     * @return ImdbMovie model or null
+     */
+    public function getMovie($id) {
+        return (isset($this->_movies[$id]) ? $this->_movies[$id] : null);
+    }
+
+    /**
+     * Adds/Merges a new ImdbMovie model.
      * @param ImdbMovie $movie model
      */
-    public function addMovie($movie) {
-        Yii::log("Movie '$movie->title' ($movie->id) added from {$this->api->name}", CLogger::LEVEL_WARNING, self::LOGPATH);
-        $this->_movies[] = $movie;
+    public function updateMovies($movie) {
+        if (!isset($this->_movies[$movie->imdbId])) {
+            Yii::log("Movie '$movie->title' ($movie->imdbId) added from {$this->api->name}", CLogger::LEVEL_WARNING, self::LOGPATH);
+            $this->_movies[$movie->imdbId] = $movie;
+        } else
+            $this->_movies[$movie->imdbId] = $this->mergeMovies($this->_movies[$movie->imdbId], $movie);
+
+        // Save movies to cache if needed
+        $this->storeToCache($this->moviesCacheKey, $this->_movies);
+
+        return $movie->imdbId;
+    }
+
+    /**
+     * Merge 2 Movie models
+     * @param array $movies of ImdbMovie models
+     */
+    public function mergeMovies($movie, $newMovie) {
+        if (!get_class($movie) == 'ImdbMovie')
+            throw new Exception("Movie attribute should a ImdbMovie model");
+        if (!get_class($newMovie) == 'ImdbMovie')
+            throw new Exception("NewMovie attribute should a ImdbMovie model");
+
+        foreach (get_object_vars($movie) as $attr => $value) {
+            $newValue = $newMovie->{$attr};
+            if (ImdbMovie::$attributesType[$attr] == ImdbMovie::TYPE_ARRAY) {
+                if (is_array($value) && is_array($newValue) && $value != $newValue) {
+                    $movie->{$attr} = array_unique(array_merge($value, $newValue));
+                }
+            } else {
+                if (is_array($value) || is_array($newValue)) {
+                    ydump($value);
+                    ydump($newValue, 1, 1);
+                }
+                if (!empty($newValue) && strlen($value) < strlen($newValue))
+                    $movie->{$attr} = $newValue;
+            }
+        }
+        Yii::log("Merge movie '$movie->title' ($movie->imdbId) model", CLogger::LEVEL_WARNING, self::LOGPATH);
+        return $movie;
     }
 
     /**
@@ -341,6 +447,7 @@ class ImdbComponent extends CApplicationComponent {
      */
     public function clearMovies() {
         $this->_movies = array();
+        $this->deleteCache($this->moviesCacheKey);
     }
 
 }
