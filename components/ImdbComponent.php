@@ -45,7 +45,7 @@ class ImdbComponent extends CApplicationComponent {
     /**
      * APIs
      */
-    CONST IMDB_ORG = 'imdbapi.org';
+    CONST MYMOVIEAPI_COM = 'mymovieapi.com';
     CONST OMDB_COM = 'omdbapi.com';
 
     /**
@@ -53,11 +53,11 @@ class ImdbComponent extends CApplicationComponent {
      */
     CONST DELIMETER = ',';
 
-    static public $apis = array(self::IMDB_ORG, self::OMDB_COM);
+    static public $apis = array(self::MYMOVIEAPI_COM, self::OMDB_COM);
     static private $apiOptions = array(
-        self::IMDB_ORG => array(
-            'id' => self::IMDB_ORG,
-            'endpoint' => 'http://imdbapi.org/',
+        self::MYMOVIEAPI_COM => array(
+            'id' => self::MYMOVIEAPI_COM,
+            'endpoint' => 'http://mymovieapi.com/',
             'searchMapping' => array(
                 'id' => 'id',
                 'title' => 'title',
@@ -67,7 +67,7 @@ class ImdbComponent extends CApplicationComponent {
                 'imdbUrl' => 'imdb_url',
                 'title' => 'title',
                 'aka' => 'also_known_as',
-                'rating' => 'rating',
+                'imdbRating' => 'rating',
                 'votes' => 'rating_count',
                 'genres' => 'genres',
                 'plot' => 'plot_simple',
@@ -95,7 +95,7 @@ class ImdbComponent extends CApplicationComponent {
                 'imdbUrl' => false,
                 'title' => 'Title',
                 'aka' => false,
-                'rating' => 'imdbRating',
+                'imdbRating' => 'imdbRating',
                 'votes' => 'imdbVotes',
                 'genres' => 'Genre',
                 'plot' => 'Plot',
@@ -184,18 +184,19 @@ class ImdbComponent extends CApplicationComponent {
             $this->api->name = $currentApi;
 
             $params = array();
-            if ($id && isset($this->api->searchMapping['imdbId']))
-                $params[$this->api->searchMapping['imdbId']] = $id;
-            if ($title && isset($this->api->searchMapping['title']))
+            if ($id && isset($this->api->searchMapping['id']) && $this->api->searchMapping['id'])
+                $params[$this->api->searchMapping['id']] = $id;
+            if ($title && isset($this->api->searchMapping['title']) && $this->api->searchMapping['title'])
                 $params[$this->api->searchMapping['title']] = $title;
-            if ($year && isset($this->api->searchMapping['year']))
+            if ($year && isset($this->api->searchMapping['year']) && $this->api->searchMapping['year'])
                 $params[$this->api->searchMapping['year']] = $year;
-            if (empty($params))
-                throw new CException("At least one valid search param should be set");
+            if (empty($params)) {
+                Yii::log("At least one valid search param should be set", CLogger::LEVEL_ERROR, 'app.components.' . __CLASS__);
+                continue;
+            }
 
             // Create $url and $params used in request
             $url = $this->buildUrl($this->api->endpoint, $params);
-
             if ($response = $this->makeRequest($url)) {
                 $movie = $this->processResponse($response);
                 $movieId = $this->updateMovies($movie);
@@ -324,7 +325,7 @@ class ImdbComponent extends CApplicationComponent {
         $model = new ImdbMovie();
         $model->apis = array($this->api->id);
         foreach ($this->api->responseMapping as $m => $i) {
-            if ($i && isset($response[$i])) {
+            if ($i && isset($response[$i]) && !in_array($response[$i], array('N/A'))) {
                 if (ImdbMovie::$attributesType[$m] == ImdbMovie::TYPE_ARRAY && !is_array($response[$i]))
                     $response[$i] = array_map('trim', explode(self::DELIMETER, $response[$i]));
                 else if (ImdbMovie::$attributesType[$m] == ImdbMovie::TYPE_TEXT && is_array($response[$i]))
@@ -404,7 +405,8 @@ class ImdbComponent extends CApplicationComponent {
         if (!isset($this->_movies[$movie->imdbId])) {
             Yii::log("Movie '$movie->title' ($movie->imdbId) added from {$this->api->name}", CLogger::LEVEL_WARNING, self::LOGPATH);
             $this->_movies[$movie->imdbId] = $movie;
-        } else
+        }
+        else
             $this->_movies[$movie->imdbId] = $this->mergeMovies($this->_movies[$movie->imdbId], $movie);
 
         // Save movies to cache if needed
@@ -430,11 +432,7 @@ class ImdbComponent extends CApplicationComponent {
                     $movie->{$attr} = array_unique(array_merge($value, $newValue));
                 }
             } else {
-                if (is_array($value) || is_array($newValue)) {
-                    ydump($value);
-                    ydump($newValue, 1, 1);
-                }
-                if (!empty($newValue) && strlen($value) < strlen($newValue))
+                if (!empty($newValue) && (empty($value) || strlen($value) < strlen($newValue)))
                     $movie->{$attr} = $newValue;
             }
         }

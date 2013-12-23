@@ -13,7 +13,7 @@ class ImdbMovie extends CFormModel {
     public $imdbUrl;
     public $title;
     public $aka;
-    public $rating;
+    public $imdbRating;
     public $votes;
     public $genres;
     public $plot;
@@ -37,7 +37,7 @@ class ImdbMovie extends CFormModel {
         'imdbUrl' => self::TYPE_TEXT,
         'title' => self::TYPE_TEXT,
         'aka' => self::TYPE_ARRAY,
-        'rating' => self::TYPE_TEXT,
+        'imdbRating' => self::TYPE_TEXT,
         'votes' => self::TYPE_TEXT,
         'genres' => self::TYPE_ARRAY,
         'plot' => self::TYPE_TEXT,
