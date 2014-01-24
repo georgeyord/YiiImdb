@@ -27,7 +27,7 @@ class ImdbComponent extends CApplicationComponent {
      * Set to the number of seconds needed to cache each request, false to deactivate it
      * @var mixed $cacheDuration Integer means seconds, false to deactivate cache
      */
-    public $cacheDuration = 600;
+    public $cacheDuration = 86400000; // 1 day
 
     CONST CACHE_KEY = 'imdb-component-';
 
@@ -172,14 +172,23 @@ class ImdbComponent extends CApplicationComponent {
      */
     public function search($title = null, $year = null, $id = null, $api = null) {
         // Activate all APIs if none selected
-        if ($api == null)
-            $api = array_keys(self::$apiOptions);
-        else if (is_string($api))
+        if ($api == null) {
+            if ($year)
+                $api = self::OMDB_COM;
+            else
+                $api = array_keys(self::$apiOptions);
+        }
+
+        if (is_string($api))
             $api = array($api);
 
         $movieId = null;
         // Request to the different APIs
         foreach ($api as $currentApi) {
+            // Check api for cached error
+            if ($this->getFromCache(self::CACHE_KEY . $currentApi . 'error', 600))
+                continue;
+
             $this->api = (object) self::$apiOptions[$currentApi];
             $this->api->name = $currentApi;
 
@@ -200,6 +209,9 @@ class ImdbComponent extends CApplicationComponent {
             if ($response = $this->makeRequest($url)) {
                 $movie = $this->processResponse($response);
                 $movieId = $this->updateMovies($movie);
+            } else if ($response === false) {
+                // Cache api error
+                $this->storeToCache(self::CACHE_KEY . $currentApi . 'error', true, 600);
             }
         }
         return $this->getMovie($movieId);
@@ -215,8 +227,7 @@ class ImdbComponent extends CApplicationComponent {
      * @return ImdbMovie model on success, false otherwise
      */
     protected function makeRequest($url) {
-        $cacheKey = self::CACHE_KEY . md5(serialize(array($url)));
-
+        $cacheKey = self::CACHE_KEY . md5(serialize($url));
         // Get cached response if exist
         if ($response = $this->getFromCache($cacheKey))
             return $response;
@@ -246,6 +257,9 @@ class ImdbComponent extends CApplicationComponent {
             $this->storeToCache($cacheKey, $response);
         } catch (ACurlException $e) {
             switch ($e->statusCode) {
+                case 6: // Couldn't resolve host
+                    $this->error = '6 - Couldn\'t resolve host or name lookup timed out';
+                    break;
                 case 400:
                     $response = CJSON::decode($e->response->data, false);
                     if (isset($response->error)) {
@@ -280,8 +294,10 @@ class ImdbComponent extends CApplicationComponent {
      * @param mixed $data
      * @return boolean
      */
-    private function getFromCache($key) {
-        if ($this->cacheDuration && isset(Yii::app()->cache) && $cached = Yii::app()->cache->get($key)) {
+    private function getFromCache($key, $cacheDuration = null) {
+        if (!$cacheDuration)
+            $cacheDuration = $this->cacheDuration;
+        if ($cacheDuration && isset(Yii::app()->cache) && $cached = Yii::app()->cache->get($key)) {
             YII_DEBUG && Yii::log("Data loaded from cache (key: $key)", CLogger::LEVEL_INFO, self::LOGPATH);
             return $cached;
         }
@@ -294,10 +310,12 @@ class ImdbComponent extends CApplicationComponent {
      * @param string $key
      * @param mixed $data
      */
-    private function storeToCache($key, $data) {
-        if ($this->cacheDuration && isset(Yii::app()->cache) && !empty($data)) {
-            Yii::app()->cache->set($key, $data, $this->cacheDuration);
-            YII_DEBUG && Yii::log("Data saved to cache (key: $key) for {$this->cacheDuration}secs", CLogger::LEVEL_INFO, self::LOGPATH);
+    private function storeToCache($key, $data, $cacheDuration = null) {
+        if (!$cacheDuration)
+            $cacheDuration = $this->cacheDuration;
+        if ($cacheDuration && isset(Yii::app()->cache) && !empty($data)) {
+            Yii::app()->cache->set($key, $data, $cacheDuration);
+            YII_DEBUG && Yii::log("Data saved to cache (key: $key) for {$cacheDuration}secs", CLogger::LEVEL_INFO, self::LOGPATH);
         }
     }
 
