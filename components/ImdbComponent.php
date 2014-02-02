@@ -68,8 +68,8 @@ class ImdbComponent extends CApplicationComponent {
     CONST IMDB_COM_SUGGESTION = 'imdb.com-suggestion';
 
     static public $apis = array(
-        self::MYMOVIEAPI_COM,
-        self::OMDB_COM,
+//        self::MYMOVIEAPI_COM,
+//        self::OMDB_COM,
         self::IMDB_COM_SUGGESTION,
     );
     static private $apiOptions = array(
@@ -214,7 +214,7 @@ class ImdbComponent extends CApplicationComponent {
             if ($year && isset(self::$apiOptions[self::OMDB_COM]))
                 $api = self::OMDB_COM;
             else
-                $api = array_keys(self::$apiOptions);
+                $api = self::$apis;
         }
 
         if (is_string($api))
@@ -255,7 +255,7 @@ class ImdbComponent extends CApplicationComponent {
             }
             if ($response instanceof ACurlResponse) {
                 $ids = $this->processResponseObject($response);
-            } else if($response === false){
+            } else if ($response === false) {
                 // Cache api error
                 $this->storeToCache(self::CACHE_KEY . $currentApi . 'error', true, 600);
             }
@@ -434,13 +434,17 @@ class ImdbComponent extends CApplicationComponent {
         // Get array of movie data per specific responseType and api
         $responseObject = $this->responseToObject($response, $this->api->responseType);
 
-        if($this->api->id == self::IMDB_COM_SUGGESTION){
+        if (!$responseObject || !is_object($responseObject))
+            return false;
+
+        if ($this->api->id == self::IMDB_COM_SUGGESTION) {
             $movieData = $responseObject->d;
             foreach ($movieData as $key => $movie) {
-                if(isset($movie->i))
+                if (isset($movie->i))
                     $movieData[$key]->i = $movie->i[0];
             }
-        } else
+        }
+        else
             $movieData = $responseObject;
 
         $ids = array();
@@ -536,8 +540,21 @@ class ImdbComponent extends CApplicationComponent {
      * Returns an array with all the Movies found
      * @return array of ImdbMovie models
      */
-    public function getMovies() {
-        return $this->_movies;
+    public function getMovies($ids = null) {
+        if ($ids === false || empty($this->_movies))
+            return null;
+
+        if (is_array($ids) || empty($ids)) {
+            $results = array();
+            foreach ($ids as $id) {
+                if (isset($this->_movies[$id]))
+                    $results[$id] = $this->_movies[$id];
+            }
+        }
+        if ($ids === null)
+            $results = $this->_movies;
+
+        return empty($results) ? null : $results;
     }
 
     /**
