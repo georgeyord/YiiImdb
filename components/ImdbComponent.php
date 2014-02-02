@@ -43,25 +43,45 @@ class ImdbComponent extends CApplicationComponent {
     CONST LOGPATH = 'app.components.imdb';
 
     /**
-     * APIs
+     * REQUEST TYPES
      */
-    CONST MYMOVIEAPI_COM = 'mymovieapi.com';
-    CONST OMDB_COM = 'omdbapi.com';
+    CONST REQUEST_TYPE_QUERYSTRING = 'query';
+    CONST REQUEST_TYPE_PLACEHOLDERS = 'placeholders';
+
+    /**
+     * RESPONSE TYPES
+     */
+    CONST RESPONSE_TYPE_JSON = 'json';
+    CONST RESPONSE_TYPE_JSONP = 'jsonp';
+    CONST RESPONSE_TYPE_XML = 'xml';
 
     /**
      * Array delimeter
      */
     CONST DELIMETER = ',';
 
-    static public $apis = array(self::MYMOVIEAPI_COM, self::OMDB_COM);
+    /**
+     * APIs
+     */
+    CONST MYMOVIEAPI_COM = 'mymovieapi.com';
+    CONST OMDB_COM = 'omdbapi.com';
+    CONST IMDB_COM_SUGGESTION = 'imdb.com-suggestion';
+
+    static public $apis = array(
+        self::MYMOVIEAPI_COM,
+        self::OMDB_COM,
+        self::IMDB_COM_SUGGESTION,
+    );
     static private $apiOptions = array(
         self::MYMOVIEAPI_COM => array(
             'id' => self::MYMOVIEAPI_COM,
-            'endpoint' => 'http://mymovieapi.com/',
-            'searchMapping' => array(
+            'requestUrl' => 'http://mymovieapi.com/',
+            'requestType' => self::REQUEST_TYPE_QUERYSTRING,
+            'requestMapping' => array(
                 'id' => 'id',
                 'title' => 'title',
             ),
+            'responseType' => self::RESPONSE_TYPE_JSON,
             'responseMapping' => array(
                 'imdbId' => 'imdb_id',
                 'imdbUrl' => 'imdb_url',
@@ -84,12 +104,14 @@ class ImdbComponent extends CApplicationComponent {
         ),
         self::OMDB_COM => array(
             'id' => self::OMDB_COM,
-            'endpoint' => 'http://omdbapi.com/',
-            'searchMapping' => array(
+            'requestUrl' => 'http://omdbapi.com/',
+            'requestType' => self::REQUEST_TYPE_QUERYSTRING,
+            'requestMapping' => array(
                 'id' => 'i',
                 'title' => 't',
                 'year' => 'y',
             ),
+            'responseType' => self::RESPONSE_TYPE_JSON,
             'responseMapping' => array(
                 'imdbId' => 'imdbID',
                 'imdbUrl' => false,
@@ -108,6 +130,22 @@ class ImdbComponent extends CApplicationComponent {
                 'writers' => 'Writer',
                 'actors' => 'Actors',
                 'rated' => 'Rated',
+            ),
+        ),
+        self::IMDB_COM_SUGGESTION => array(
+            'id' => self::IMDB_COM_SUGGESTION,
+            'requestUrl' => 'http://sg.media-imdb.com/suggests/{title:first}/{title}.json',
+            'requestType' => self::REQUEST_TYPE_PLACEHOLDERS,
+            'requestMapping' => array(
+                'title' => '{title}',
+            ),
+            'responseType' => self::RESPONSE_TYPE_JSONP,
+            'responseMapping' => array(
+                'imdbId' => 'id',
+                'title' => 'l',
+                'images' => 'i',
+                'year' => 'y',
+                'actors' => 's',
             ),
         ),
     );
@@ -173,7 +211,7 @@ class ImdbComponent extends CApplicationComponent {
     public function search($title = null, $year = null, $id = null, $api = null) {
         // Activate all APIs if none selected
         if ($api == null) {
-            if ($year)
+            if ($year && isset(self::$apiOptions[self::OMDB_COM]))
                 $api = self::OMDB_COM;
             else
                 $api = array_keys(self::$apiOptions);
@@ -193,28 +231,36 @@ class ImdbComponent extends CApplicationComponent {
             $this->api->name = $currentApi;
 
             $params = array();
-            if ($id && isset($this->api->searchMapping['id']) && $this->api->searchMapping['id'])
-                $params[$this->api->searchMapping['id']] = $id;
-            if ($title && isset($this->api->searchMapping['title']) && $this->api->searchMapping['title'])
-                $params[$this->api->searchMapping['title']] = $title;
-            if ($year && isset($this->api->searchMapping['year']) && $this->api->searchMapping['year'])
-                $params[$this->api->searchMapping['year']] = $year;
+            if ($id && isset($this->api->requestMapping['id']) && $this->api->requestMapping['id'])
+                $params[$this->api->requestMapping['id']] = $id;
+            if ($title && isset($this->api->requestMapping['title']) && $this->api->requestMapping['title'])
+                $params[$this->api->requestMapping['title']] = $title;
+            if ($year && isset($this->api->requestMapping['year']) && $this->api->requestMapping['year'])
+                $params[$this->api->requestMapping['year']] = $year;
             if (empty($params)) {
                 Yii::log("At least one valid search param should be set", CLogger::LEVEL_ERROR, 'app.components.' . __CLASS__);
                 continue;
             }
 
             // Create $url and $params used in request
-            $url = $this->buildUrl($this->api->endpoint, $params);
-            if ($response = $this->makeRequest($url)) {
-                $movie = $this->processResponse($response);
-                $movieId = $this->updateMovies($movie);
-            } else if ($response === false) {
+            $url = $this->buildUrl($this->api->requestUrl, $this->api->requestType, $params);
+
+            // Get cached response if exist
+            $cacheKey = self::CACHE_KEY . md5(serialize($url));
+            if (!($response = $this->getFromCache($cacheKey))) {
+                $response = $this->makeRequest($url);
+                // Save response to cache if needed
+                if ($response)
+                    $this->storeToCache($cacheKey, $response);
+            }
+            if ($response instanceof ACurlResponse) {
+                $ids = $this->processResponseObject($response);
+            } else if($response === false){
                 // Cache api error
                 $this->storeToCache(self::CACHE_KEY . $currentApi . 'error', true, 600);
             }
         }
-        return $this->getMovie($movieId);
+        return isset($ids) ? $this->getMovies($ids) : array();
     }
 
     /** PRIVATE FUNCTIONS */
@@ -223,42 +269,20 @@ class ImdbComponent extends CApplicationComponent {
      * Make a request and get the response
      *
      * @param String $url API url
-     * @param String $cacheKey to load from cache
      * @return ImdbMovie model on success, false otherwise
      */
     protected function makeRequest($url) {
-        $cacheKey = self::CACHE_KEY . md5(serialize($url));
-        // Get cached response if exist
-        if ($response = $this->getFromCache($cacheKey))
-            return $response;
-
         $request = $this->curl->get($url, false);
+        $response = null;
+
         try {
             Yii::log(sprintf('Curl request to %s', $url), CLogger::LEVEL_INFO, self::LOGPATH);
             $response = $request->exec();
-
-            // Decode and validate json
-            $response = $response->fromJSON();
-            if (json_last_error() != JSON_ERROR_NONE) {
-                $this->error = 'Response should be in json format';
-                return false;
-            }
-            // Check response
-            if (isset($response['error'])) {
-                $this->error = $response['error'];
-                return false;
-            }
-            if (isset($response['Error'])) {
-                $this->error = $response['Error'];
-                return false;
-            }
-
-            // Save response to cache if needed
-            $this->storeToCache($cacheKey, $response);
         } catch (ACurlException $e) {
             switch ($e->statusCode) {
                 case 6: // Couldn't resolve host
                     $this->error = '6 - Couldn\'t resolve host or name lookup timed out';
+                    $response = false;
                     break;
                 case 400:
                     $response = CJSON::decode($e->response->data, false);
@@ -281,7 +305,6 @@ class ImdbComponent extends CApplicationComponent {
                 default:
                     break;
             }
-            $response = false;
         }
 
         return $response;
@@ -333,28 +356,114 @@ class ImdbComponent extends CApplicationComponent {
     /**
      * Decode and check response
      *
+     * @param string $response
+     * @return tdClass object
+     */
+    private function responseToObject($response, $responseType) {
+        switch ($responseType) {
+            case self::RESPONSE_TYPE_JSON:
+                return $this->jsonToObject($response);
+                break;
+            case self::RESPONSE_TYPE_JSONP:
+                return $this->jsonpToObject($response);
+                break;
+            case self::RESPONSE_TYPE_XML:
+                return $this->xmlToObject($response);
+                break;
+
+            default:
+                break;
+        }
+        throw new Exception("Response type '$responseType' is not valid");
+    }
+
+    private function jsonToObject($response) {
+        // Decode and validate json
+        $response = $response->fromJSON();
+        if (json_last_error() != JSON_ERROR_NONE) {
+            $this->error = 'Response should be in json format';
+            return false;
+        }
+        // Check response
+        if (isset($response['error'])) {
+            $this->error = $response['error'];
+            return false;
+        }
+        if (isset($response['Error'])) {
+            $this->error = $response['Error'];
+            return false;
+        }
+        return $response;
+    }
+
+    private function jsonpToObject($response) {
+        $response = $response->data;
+        // Decode and validate json
+        if ($response[0] !== '[' && $response[0] !== '{') { // we have JSONP
+            $response = substr($response, strpos($response, '('));
+        }
+        return json_decode(trim($response, '();'));
+    }
+
+    private function xmlToObject($response) {
+        // Decode and validate json
+        $response = $response->fromJSON();
+        if (json_last_error() != JSON_ERROR_NONE) {
+            $this->error = 'Response should be in json format';
+            return false;
+        }
+        // Check response
+        if (isset($response['error'])) {
+            $this->error = $response['error'];
+            return false;
+        }
+        if (isset($response['Error'])) {
+            $this->error = $response['Error'];
+            return false;
+        }
+        return $response;
+    }
+
+    /**
+     * Map response to a Movie object
+     *
      * @param json $response
      * @return ImdbMovie model on success, false otherwise
      */
-    private function processResponse($response) {
-        if (!isset($response['year']) && isset($response[0]) && isset($response[0]['year']))
-            $response = $response[0];
+    private function processResponseObject($response) {
+        // Get array of movie data per specific responseType and api
+        $responseObject = $this->responseToObject($response, $this->api->responseType);
 
-        $model = new ImdbMovie();
-        $model->apis = array($this->api->id);
-        foreach ($this->api->responseMapping as $m => $i) {
-            if ($i && isset($response[$i]) && !in_array($response[$i], array('N/A'))) {
-                if (ImdbMovie::$attributesType[$m] == ImdbMovie::TYPE_ARRAY && !is_array($response[$i]))
-                    $response[$i] = array_map('trim', explode(self::DELIMETER, $response[$i]));
-                else if (ImdbMovie::$attributesType[$m] == ImdbMovie::TYPE_TEXT && is_array($response[$i]))
-                    $response[$i] = implode(self::DELIMETER, $response[$i]);
-                else if (is_string($response[$i]))
-                    $response[$i] = trim($response[$i]);
-                $model->{$m} = $response[$i];
+        if($this->api->id == self::IMDB_COM_SUGGESTION){
+            $movieData = $responseObject->d;
+            foreach ($movieData as $key => $movie) {
+                if(isset($movie->i))
+                    $movieData[$key]->i = $movie->i[0];
             }
+        } else
+            $movieData = $responseObject;
+
+        $ids = array();
+        foreach ($movieData as $movie) {
+            $movie = (array) $movie;
+            $model = new ImdbMovie();
+            $model->apis = array($this->api->id);
+            foreach ($this->api->responseMapping as $m => $i) {
+                if ($i && isset($movie[$i]) && !in_array($movie[$i], array('N/A'))) {
+                    if (ImdbMovie::$attributesType[$m] == ImdbMovie::TYPE_ARRAY && !is_array($movie[$i]))
+                        $movie[$i] = array_map('trim', explode(self::DELIMETER, $movie[$i]));
+                    else if (ImdbMovie::$attributesType[$m] == ImdbMovie::TYPE_TEXT && is_array($movie[$i]))
+                        $movie[$i] = implode(self::DELIMETER, $movie[$i]);
+                    else if (is_string($movie[$i]))
+                        $movie[$i] = trim($movie[$i]);
+                    $model->{$m} = $movie[$i];
+                }
+            }
+            $movieId = $this->updateMovies($model);
+            array_push($ids, $movieId);
         }
 
-        return $model;
+        return $ids;
     }
 
     /**
@@ -364,8 +473,16 @@ class ImdbComponent extends CApplicationComponent {
      * @param array $params
      * @return string the final url
      */
-    private function buildUrl($url, $params) {
-        return $url . '?' . $this->buildQuery($params);
+    private function buildUrl($url, $type, $params) {
+        switch ($type) {
+            case self::REQUEST_TYPE_QUERYSTRING:
+                return $url . '?' . $this->urlWithQuery($params);
+                break;
+            case self::REQUEST_TYPE_PLACEHOLDERS:
+                return $this->urlFromPlaceholders($url, $params);
+                break;
+        }
+        throw new Exception("Request type '$type' is not valid");
     }
 
     /**
@@ -375,7 +492,7 @@ class ImdbComponent extends CApplicationComponent {
      * @param string $format spintf first parameter
      * @return string
      */
-    private function buildQuery($params, $format = '%s') {
+    private function urlWithQuery($params, $format = '%s') {
         $query = "";
         foreach ($params as $key => $value) {
             if (is_array($value)) {
@@ -385,6 +502,22 @@ class ImdbComponent extends CApplicationComponent {
             }
         }
         return $query;
+    }
+
+    /**
+     * Build query string from array
+     *
+     * @param array of strings $params
+     * @param string $format spintf first parameter
+     * @return string
+     */
+    private function urlFromPlaceholders($url, $params) {
+        foreach ($params as $search => $replace) {
+            $replace = strtolower($replace);
+            $url = str_replace(rtrim($search, "}") . ':first}', $replace[0], $url);
+            $url = str_replace($search, $replace, $url);
+        }
+        return $url;
     }
 
     /**
