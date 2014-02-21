@@ -1,3 +1,6 @@
 [submodule "lib/yii-curl"]
 	path = lib/yii-curl
 	url = git@github.com:phpnode/YiiCurl.git
+[submodule "lib/tmdb"]
+	path = lib/tmdb
+	url = git@github.com:pixelead0/tmdb_v3-PHP-API-.git

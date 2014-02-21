@@ -1,25 +1,26 @@
 <?php
 
 /**
- * ImdbMovie
+ * MovieInfo
  *
  * This class is a container for Movie data from IMDB.
  *
  * NOTE: Not all properties are available from all APIs
  */
-class ImdbMovie extends CFormModel {
+class MovieInfo extends CFormModel {
 
     public $imdbId;
     public $imdbUrl;
     public $title;
     public $aka;
-    public $imdbRating;
+    public $rating;
     public $votes;
     public $genres;
     public $plot;
     public $languages;
     public $countries;
     public $images;
+    public $trailers;
     public $year;
     public $runtime;
     public $directors;
@@ -37,13 +38,14 @@ class ImdbMovie extends CFormModel {
         'imdbUrl' => self::TYPE_TEXT,
         'title' => self::TYPE_TEXT,
         'aka' => self::TYPE_ARRAY,
-        'imdbRating' => self::TYPE_TEXT,
+        'rating' => self::TYPE_TEXT,
         'votes' => self::TYPE_TEXT,
         'genres' => self::TYPE_ARRAY,
         'plot' => self::TYPE_TEXT,
         'languages' => self::TYPE_ARRAY,
         'countries' => self::TYPE_ARRAY,
         'images' => self::TYPE_ARRAY,
+        'trailers' => self::TYPE_ARRAY,
         'year' => self::TYPE_TEXT,
         'runtime' => self::TYPE_TEXT,
         'directors' => self::TYPE_ARRAY,
