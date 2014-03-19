@@ -3,4 +3,5 @@
 	url = git@github.com:phpnode/YiiCurl.git
 [submodule "lib/tmdb"]
 	path = lib/tmdb
-	url = git@github.com:pixelead0/tmdb_v3-PHP-API-.git
+	url = git@github.com:georgeyord/tmdb_v3-PHP-API-.git
+	#url = git@github.com:pixelead0/tmdb_v3-PHP-API-.git
